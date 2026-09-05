@@ -45,6 +45,10 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
           iPhone 音樂備份
         </button>
+        <button id="headerSyncBtn" class="main-tab sync-tab-highlight" title="將 Mac 音樂庫同步至 iPhone">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+          ⚡️ 一鍵同步至 iPhone
+        </button>
       </nav>
     </header>
 
@@ -246,9 +250,13 @@
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
               在 Finder 中開啟
             </button>
-            <button id="openMusicAppBtn" class="btn btn-accent">
+            <button id="openMusicAppBtn" class="btn btn-secondary">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
-              打開 Mac 音樂 (Apple Music)
+              打開 Mac 音樂
+            </button>
+            <button id="syncIphoneDeviceBtn" class="btn btn-accent">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
+              📱 一鍵同步至 iPhone
             </button>
           </div>
         </div>
@@ -271,10 +279,16 @@
             <p id="iphoneDeviceDetail" class="device-detail">請確認傳輸線已插上並解鎖 iPhone</p>
           </div>
         </div>
-        <button id="refreshIphoneBtn" class="btn btn-secondary btn-sm" title="重新偵測裝置">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
-          重新整理
-        </button>
+        <div class="device-actions-right" style="display: flex; gap: 8px; align-items: center;">
+          <button id="cardSyncBtn" class="btn btn-accent btn-sm" style="background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); color: #000; font-weight: 700;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
+            ⚡️ 一鍵同步至 iPhone
+          </button>
+          <button id="refreshIphoneBtn" class="btn btn-secondary btn-sm" title="重新偵測裝置">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+            重新整理
+          </button>
+        </div>
       </section>
 
       <!-- Detected Playlists Section -->
@@ -329,9 +343,13 @@
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
               在 Finder 中開啟備份
             </button>
-            <button id="openIphoneMusicAppBtn" class="btn btn-accent">
+            <button id="openIphoneMusicAppBtn" class="btn btn-secondary">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
-              打開 Mac 音樂 (Apple Music)
+              打開 Mac 音樂
+            </button>
+            <button id="syncIphoneDeviceBtn2" class="btn btn-accent">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
+              📱 一鍵同步至 iPhone
             </button>
           </div>
         </div>

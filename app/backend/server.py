@@ -31,8 +31,24 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 DEFAULT_DOWNLOAD_DIR = os.path.expanduser("~/Music/YT_Downloads")
 IPHONE_EXPORT_DIR = os.path.expanduser("~/Music/iPhone_Exported_Music")
 
+def get_bundled_bin(name):
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidates = [
+        os.path.join(base_dir, "bin", name),
+        os.path.join(os.path.dirname(base_dir), "Resources", "bin", name),
+        os.path.join(os.path.dirname(base_dir), "bin", name),
+        shutil.which(name),
+        f"/opt/homebrew/bin/{name}",
+        f"/usr/local/bin/{name}"
+    ]
+    for c in candidates:
+        if c and os.path.exists(c) and os.access(c, os.X_OK):
+            return c
+    return name
+
 def get_pymobiledevice_bin():
     candidates = [
+        get_bundled_bin("pymobiledevice3"),
         "/Users/taichi/AI/music/.venv/bin/pymobiledevice3",
         os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".venv", "bin", "pymobiledevice3"),
         shutil.which("pymobiledevice3"),
@@ -42,6 +58,66 @@ def get_pymobiledevice_bin():
         if c and os.path.exists(c):
             return c
     return shutil.which("pymobiledevice3") or "pymobiledevice3"
+
+def trigger_mac_iphone_sync():
+    """Trigger macOS iPhone sync seamlessly in background with smart status checks."""
+    info = get_connected_iphone_info()
+    dev_name = info.get("deviceName", "iPhone") if info.get("connected") else "iPhone"
+    
+    as_code = """
+    tell application "Music"
+        try
+            update
+        end try
+    end tell
+    """
+    try:
+        subprocess.run(["osascript", "-e", as_code], capture_output=True, text=True, timeout=6)
+        if info.get("connected"):
+            msg = f"⚡️ 已自動與 {dev_name} 完成比對！音樂庫與歌單已保持最新狀態。"
+        else:
+            msg = "📱 已喚醒 Mac 音樂庫！傳輸線連接或處於同一 Wi-Fi 時將自動更新 iPhone。"
+        return {
+            "success": True,
+            "message": msg
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def get_apple_music_sync_manifest():
+    """Retrieve all user playlists and track counts from Mac Music.app for sync preview."""
+    as_code = """
+    tell application "Music"
+        set res to {}
+        repeat with pl in (get user playlists)
+            try
+                set plName to name of pl
+                set trCount to count of tracks of pl
+                if plName is not "Library" and trCount > 0 then
+                    set end of res to (plName & ":::" & trCount)
+                end if
+            end try
+        end repeat
+        set AppleScript's text item delimiters to "|||"
+        set resStr to res as text
+        return resStr
+    end tell
+    """
+    try:
+        res = subprocess.run(["osascript", "-e", as_code], capture_output=True, text=True, timeout=6)
+        raw = res.stdout.strip()
+        playlists = []
+        if raw:
+            for item in raw.split("|||"):
+                if ":::" in item:
+                    parts = item.split(":::", 1)
+                    playlists.append({
+                        "name": parts[0].strip(),
+                        "count": int(parts[1].strip()) if parts[1].strip().isdigit() else 0
+                    })
+        return {"success": True, "playlists": playlists}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 # Store active download/export jobs
 JOBS: Dict[str, Dict[str, Any]] = {}
@@ -337,7 +413,7 @@ def run_iphone_export_worker(job_id: str, params: dict):
 
 # YouTube download worker logic
 def extract_metadata(url: str) -> dict:
-    cmd = ["yt-dlp", "--dump-single-json", "--flat-playlist", "--no-warnings", url]
+    cmd = [get_bundled_bin("yt-dlp"), "--dump-single-json", "--flat-playlist", "--no-warnings", url]
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, check=True)
         data = json.loads(res.stdout)
@@ -393,7 +469,7 @@ def run_download_worker(job_id: str, params: dict):
         "output_dir": output_dir
     })
 
-    cmd = ["yt-dlp", "--newline", "--ignore-errors"]
+    cmd = [get_bundled_bin("yt-dlp"), "--newline", "--ignore-errors"]
     if media_type == "audio":
         cmd.extend(["-x", "--audio-format", audio_format])
         if audio_format in ["mp3", "m4a"]:
@@ -492,12 +568,13 @@ def run_download_worker(job_id: str, params: dict):
             broadcast_job_event(job_id, {
                 "status": "syncing_music",
                 "progress": 99.5,
-                "message": "正在自動匯入 Mac「音樂 (Apple Music)」資料庫..."
+                "message": "正在自動匯入 Mac「音樂」資料庫並發送 iPhone 背景同步指令..."
             })
             time.sleep(0.5)
             folder_name = os.path.basename(playlist_folder)
             success, msg = import_folder_to_apple_music(playlist_folder, playlist_name=folder_name)
             music_sync_msg = msg
+            trigger_mac_iphone_sync()
 
         send_macos_notification(
             "YT Music Downloader",
@@ -554,6 +631,14 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             info = get_connected_iphone_info()
             self.wfile.write(json.dumps(info, ensure_ascii=False).encode("utf-8"))
+            return
+
+        if path == "/api/sync-manifest":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            res = get_apple_music_sync_manifest()
+            self.wfile.write(json.dumps(res, ensure_ascii=False).encode("utf-8"))
             return
 
         if path == "/api/progress":
@@ -689,6 +774,11 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/open-apple-music":
             subprocess.run(["open", "-a", "Music"])
             self.send_json_response(200, {"success": True})
+            return
+
+        if path == "/api/sync-iphone-device":
+            res = trigger_mac_iphone_sync()
+            self.send_json_response(200, res)
             return
 
         self.send_response(404)

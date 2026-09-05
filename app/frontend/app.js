@@ -98,6 +98,11 @@ function setupTabs() {
     ytSection.classList.add('hidden');
     fetchIphoneStatus();
   });
+
+  const headerSyncBtn = document.getElementById('headerSyncBtn');
+  if (headerSyncBtn) {
+    headerSyncBtn.addEventListener('click', triggerIphoneSync);
+  }
 }
 
 function setupYtEvents() {
@@ -161,6 +166,11 @@ function setupYtEvents() {
   openMusicAppBtn.addEventListener('click', () => {
     fetch('/api/open-apple-music', { method: 'POST' });
   });
+
+  const syncIphoneDeviceBtn = document.getElementById('syncIphoneDeviceBtn');
+  if (syncIphoneDeviceBtn) {
+    syncIphoneDeviceBtn.addEventListener('click', triggerIphoneSync);
+  }
 }
 
 function setupIphoneEvents() {
@@ -189,6 +199,57 @@ function setupIphoneEvents() {
   openIphoneMusicAppBtn.addEventListener('click', () => {
     fetch('/api/open-apple-music', { method: 'POST' });
   });
+
+  const cardSyncBtn = document.getElementById('cardSyncBtn');
+  if (cardSyncBtn) {
+    cardSyncBtn.addEventListener('click', triggerIphoneSync);
+  }
+
+  const syncIphoneDeviceBtn2 = document.getElementById('syncIphoneDeviceBtn2');
+  if (syncIphoneDeviceBtn2) {
+    syncIphoneDeviceBtn2.addEventListener('click', triggerIphoneSync);
+  }
+}
+
+let toastTimer = null;
+function showToast(message, isSuccess = true, duration = 12000) {
+  let toast = document.getElementById('appToast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'appToast';
+    toast.className = 'app-toast';
+    document.body.appendChild(toast);
+  }
+
+  if (toastTimer) clearTimeout(toastTimer);
+
+  toast.innerHTML = `
+    <div class="toast-content ${isSuccess ? 'success' : 'error'}">
+      <span class="toast-icon">${isSuccess ? '⚡️' : '⚠️'}</span>
+      <span class="toast-text">${message}</span>
+      <button class="toast-close-btn" title="關閉提示" onclick="this.closest('.app-toast').classList.remove('show')">✕</button>
+    </div>
+  `;
+  toast.classList.add('show');
+
+  toastTimer = setTimeout(() => {
+    toast.classList.remove('show');
+  }, duration);
+}
+
+async function triggerIphoneSync() {
+  showToast('正在發送背景同步與音樂庫寫入指令...', true);
+  try {
+    const res = await fetch('/api/sync-iphone-device', { method: 'POST' });
+    const data = await res.json();
+    if (data && data.success) {
+      showToast(data.message || '⚡️ 已發送背景同步指令！正自動比對並寫入 iPhone', true);
+    } else {
+      showToast((data && data.error) || '無法自動喚醒背景同步', false);
+    }
+  } catch (e) {
+    showToast('觸發背景同步失敗', false);
+  }
 }
 
 async function loadDefaultPaths() {

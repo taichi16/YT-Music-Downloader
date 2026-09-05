@@ -1,46 +1,78 @@
-# YT Music Downloader
+# YT Music Downloader & iPhone Music Suite (macOS)
 
-## About
+![macOS 11.0+](https://img.shields.io/badge/macOS-11.0%2B-blue?logo=apple)
+![License](https://img.shields.io/badge/License-MIT-green)
+![Version](https://img.shields.io/badge/Version-v2.0.0--Portable-cyber)
 
-這是一個 **macOS 原生應用程式**，結合了以下資源與技術，讓使用者能夠輕鬆下載 YouTube 音樂歌單、管理 iPhone 音樂以及同步至 macOS `Music.app`。
+這是一款專為 **macOS** 設計的高顏值玻璃擬態原生應用程式，結合了 **YouTube 音樂/歌單極速下載**、**iPhone 音樂資料庫完整備份**、**自動匯入 Mac 音樂 (Apple Music)**，以及 **背景一鍵智慧增量同步至 iPhone** 功能。
 
-### 開發引用的資源
-- **yt‑dlp**：用於從 YouTube 解析與下載影片與音訊。
-- **ffmpeg**：負責音訊轉檔與封面嵌入。
-- **Swift** (`main.swift`)：提供 macOS App 的 UI 前端，採用玻璃擬態、動態動畫與自訂字體，打造高級感介面。
-- **Python** (`export_iphone_music.py`、`app/backend/server.py`)：負責與 iPhone 通訊、讀取音樂檔、產生播放清單文字檔，使用 `mutagen` 解析 MP3 ID3 標籤。
-- **Homebrew**：安裝上述工具與相依套件。
+---
 
-### 程式功能
-1. **YouTube 下載**：輸入 YouTube 播放清單 URL，即可一次性下載全部影片的 MP3，並自動加入 ID3 標籤與封面。
-2. **iPhone 音樂匯出**：使用 `pymobiledevice3` 連接 iPhone，將裝置內的音樂檔匯出至 `~/Music/iPhone_Exported_Music/`，並可直接匯入 macOS `Music.app`。
-3. **播放清單匯出**：將下載的播放清單自動解析為 `.txt` 文字檔，每首以 `序號. 歌名 - 演出者` 格式呈現，方便檢視與分享。
-4. **同步功能**：匯出後的 MP3 會自動加入 macOS `Music.app`，可利用系統同步至其他 Apple 裝置。
+## 🌟 軟體主要功能
 
-## Usage
-```bash
-# 1. 安裝相依套件
-brew install yt-dlp ffmpeg
+1. **YouTube & YT Music 極速下載**：
+   - 支援單一影片或完整播放清單下載。
+   - 內建 MP3 (320kbps)、M4A、FLAC、WAV 及 MP4 影片格式選擇。
+   - 自動內嵌高畫質專輯封面圖案與完整的 ID3 歌曲標籤。
 
-# 2. 下載 YouTube 播放清單
-python3 export_iphone_music.py "https://www.youtube.com/playlist?list=YOUR_PLAYLIST_ID"
+2. **iPhone 音樂資料庫全量備份與分類**：
+   - 直接連結 iPhone（支援 USB 與 Wi‑Fi 傳輸）。
+   - 自動解析 iPhone 內建 `MediaLibrary` 資料庫，將所有歌單完整匯出至 Mac，並自動建立 Apple Music 播放清單。
 
-# 3. 匯出 iPhone 音樂（連接 iPhone 後）
-python3 export_iphone_music.py --export-iphone
-```
+3. **⚡️ 背景一鍵同步至 iPhone (Smart Incremental Sync)**：
+   - 點擊 **`⚡️ 一鍵同步至 iPhone`**，背景自動比對 Mac 音樂庫與 iPhone。
+   - **智慧去重與增量寫入**：只更新新下載的音樂，已存在的歌曲絕不重複複製。
+   - **純背景運作**：無需手動打開或操作 Finder 視窗。
 
-## Repository Structure
-```
+4. **歌單文字檔匯出**：
+   - 下載後可自動解析並產出清晰的 `歌單清單.txt`（包含序號、歌名與演出者）。
+
+---
+
+## 📦 免安裝獨立可攜版 (Standalone Portable Package)
+
+本專案提供 **完全零相依套件 (Zero-Dependency)** 的獨立免安裝打包版！打包檔中已完整內嵌所有必需元件：
+
+- 包含獨立封裝的 **yt-dlp** 串流解析核心
+- 包含獨立封裝的 **ffmpeg / ffprobe** 音訊轉檔與封面內嵌工具
+- 包含獨立 **Swift 原生 UI** 與 **Python 後端**
+
+### 🚀 如何在任何 Mac 上解壓即用：
+1. 下載 [`YT_Music_Downloader_macOS_Portable.zip`](./YT_Music_Downloader_macOS_Portable.zip)。
+2. 解壓縮後將 **`YT Music Downloader.app`** 拖移至「應用程式 (Applications)」資料夾。
+3. **雙擊即可直接開啟使用**！無需開啟終端機，無需安裝 Homebrew、Python 或任何第三方套件！
+
+---
+
+## 🛠️ 開發引用的資源與開源技術
+
+- **[yt-dlp](https://github.com/yt-dlp/yt-dlp)**：負責從 YouTube / YouTube Music 解析與下載高品質音訊與影片。
+- **[FFmpeg](https://ffmpeg.org/)**：負責音訊轉檔、合併多軌、ID3 標籤寫入與專輯封面內嵌。
+- **Swift / WebKit / Cocoa**：構建玻璃擬態與動態科技風介面 (Glassmorphism & Ambient Glow)。
+- **pymobiledevice3**：透過 Apple 官方 AFC 協定解析與備份 iPhone `MediaLibrary` 資料庫。
+- **Python (http.server & mutagen)**：提供本機端微服務與 MP3 音訊標籤處理。
+
+---
+
+## 📂 專案結構 (Repository Structure)
+
+```text
 YT Music Downloader/
-├─ main.swift            # Swift UI 程式入口
-├─ export_iphone_music.py# 主要 Python 腳本
+├─ YT Music Downloader.app/                # macOS 原生應用程式 Bundle (已內嵌 yt-dlp/ffmpeg)
+├─ YT_Music_Downloader_macOS_Portable.zip  # 全自動免安裝獨立可攜版壓縮檔
+├─ main.swift                              # Swift UI 進入點
+├─ build_app.sh                            # 一鍵自動打包腳本 (含 binary 內嵌)
+├─ export_iphone_music.py                  # iPhone 音樂備份獨立腳本
 ├─ app/
 │   ├─ backend/
-│   │   └─ server.py    # 後端服務，提供本機 API
-│   └─ frontend/        # Web App 介面檔
-├─ build_app.sh          # 編譯 Swift 程式的腳本
-└─ README.md             # 本說明文件
+│   │   ├─ server.py                        # 後端微服務 API (連接 Apple Music & 同步)
+│   │   └─ bin/                            # 內嵌之 yt-dlp & ffmpeg 可執行檔
+│   └─ frontend/                           # HTML5 / CSS3 / JS 科技風 UI
+└─ README.md                               # 專案說明文件
 ```
 
-## License
-MIT License – 允許自由使用、修改與發行。
+---
+
+## 📜 授權條款 (License)
+
+本專案採用 [MIT License](LICENSE) 授權發行。自由供個人學習與非商業用途使用。

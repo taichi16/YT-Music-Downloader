@@ -30,6 +30,22 @@ if [ -f "$DIR/AppIcon.icns" ]; then
     cp "$DIR/AppIcon.icns" "$RESOURCES_DIR/"
 fi
 
+# Bundle standalone binaries (yt-dlp, ffmpeg, ffprobe) for Zero-Dependency Portable execution
+BIN_DIR="$RESOURCES_DIR/bin"
+mkdir -p "$BIN_DIR"
+mkdir -p "$DIR/app/backend/bin"
+
+for tool in yt-dlp ffmpeg ffprobe; do
+    TOOL_PATH=$(which $tool || echo "/opt/homebrew/bin/$tool")
+    if [ -f "$TOOL_PATH" ]; then
+        cp "$TOOL_PATH" "$BIN_DIR/"
+        cp "$TOOL_PATH" "$DIR/app/backend/bin/"
+        chmod +x "$BIN_DIR/$tool"
+        chmod +x "$DIR/app/backend/bin/$tool"
+        echo "📦 Bundled $tool into app bundle"
+    fi
+done
+
 # Create standard Info.plist
 cat << EOF > "$CONTENTS_DIR/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -47,9 +63,9 @@ cat << EOF > "$CONTENTS_DIR/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>2.0.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
@@ -68,3 +84,10 @@ EOF
 chmod +x "$MACOS_DIR/$APP_NAME"
 
 echo "✅ Native macOS App created successfully at: $APP_DIR"
+
+# Package into Zero-Dependency Portable ZIP
+PORTABLE_ZIP="$DIR/YT_Music_Downloader_macOS_Portable.zip"
+rm -f "$PORTABLE_ZIP"
+echo "📦 Packaging Zero-Dependency Portable ZIP archive..."
+cd "$DIR" && zip -r -q "$PORTABLE_ZIP" "$APP_NAME.app"
+echo "🎉 Standalone Portable Zip created at: $PORTABLE_ZIP"
