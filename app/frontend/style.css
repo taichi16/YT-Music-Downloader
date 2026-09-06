@@ -157,6 +157,15 @@ body {
   -webkit-app-region: drag;
 }
 
+.about-tab {
+  min-width: 58px;
+  color: var(--text-muted);
+}
+
+.about-tab:hover {
+  color: var(--accent-cyan);
+}
+
 .app-icon-wrapper {
   width: 48px;
   height: 48px;
@@ -1197,6 +1206,43 @@ input:checked + .slider:before {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.about-modal-card {
+  max-width: 600px;
+}
+
+.about-lead {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 15px;
+}
+
+.about-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.about-section h4 {
+  margin: 0;
+  color: var(--accent-cyan);
+  font-size: 14px;
+}
+
+.about-section ul,
+.about-section ol {
+  margin: 0;
+  padding-left: 22px;
+  color: var(--text-muted);
+  line-height: 1.65;
+  font-size: 13px;
+}
+
+.about-author {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
 }
 
 .modal-header {

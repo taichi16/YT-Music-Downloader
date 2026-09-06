@@ -87,3 +87,7 @@ YT Music Downloader/
 ## Windows 11 移植狀態
 
 Windows 11 可支援 YouTube／YouTube Music 解析、下載與 FFmpeg 轉檔。執行 `run_windows.bat` 會先檢查 Python 3.10+、yt-dlp、FFmpeg 與 FFprobe，缺少必要工具時直接列出安裝提示並停止啟動。Windows 版目前不支援 Apple Music 匯入、Finder 同步或 iPhone 音樂資料庫操作；介面會明確顯示此限制，不把這些功能誤報為可用。完整的 Windows 安裝程式、簽署與乾淨環境驗收仍屬後續交付工作，詳見 `WINDOWS_PORTING_GUIDE.md`。
+
+## 關於
+
+應用程式內的「關於」按鈕會說明使用的開發工具、基本使用方式與作者資訊。作者：**YuJhao Wang**。

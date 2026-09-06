@@ -45,6 +45,10 @@ const completionActions = document.getElementById('completionActions');
 const completionMessage = document.getElementById('completionMessage');
 const openFolderBtn = document.getElementById('openFolderBtn');
 const openMusicAppBtn = document.getElementById('openMusicAppBtn');
+const aboutBtn = document.getElementById('aboutBtn');
+const aboutModal = document.getElementById('aboutModal');
+const closeAboutModalBtn = document.getElementById('closeAboutModalBtn');
+const aboutCloseBtn = document.getElementById('aboutCloseBtn');
 const environmentBanner = document.getElementById('environmentBanner');
 const environmentTitle = document.getElementById('environmentTitle');
 const environmentDetail = document.getElementById('environmentDetail');
@@ -90,6 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupTabs();
   setupYtEvents();
   setupIphoneEvents();
+  setupAboutEvents();
   loadDefaultPaths();
   loadEnvironmentReport();
 });
@@ -121,6 +126,17 @@ async function loadEnvironmentReport() {
       environmentDetail.textContent = '請重新啟動應用程式，並確認本機伺服器可用。';
     }
   }
+}
+
+function setupAboutEvents() {
+  if (!aboutBtn || !aboutModal) return;
+  const close = () => aboutModal.classList.add('hidden');
+  aboutBtn.addEventListener('click', () => aboutModal.classList.remove('hidden'));
+  closeAboutModalBtn?.addEventListener('click', close);
+  aboutCloseBtn?.addEventListener('click', close);
+  aboutModal.addEventListener('click', (event) => {
+    if (event.target === aboutModal) close();
+  });
 }
 
 function setupWindowDragHandler() {
