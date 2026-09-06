@@ -33,13 +33,14 @@ fi
 # Bundle standalone binaries (yt-dlp, ffmpeg, ffprobe) for Zero-Dependency Portable execution
 BIN_DIR="$RESOURCES_DIR/bin"
 mkdir -p "$BIN_DIR"
+rm -rf "$DIR/app/backend/bin"
 mkdir -p "$DIR/app/backend/bin"
 
 for tool in yt-dlp ffmpeg ffprobe; do
     TOOL_PATH=$(which $tool || echo "/opt/homebrew/bin/$tool")
     if [ -f "$TOOL_PATH" ]; then
-        cp "$TOOL_PATH" "$BIN_DIR/"
-        cp "$TOOL_PATH" "$DIR/app/backend/bin/"
+        cp -f "$TOOL_PATH" "$BIN_DIR/"
+        cp -f "$TOOL_PATH" "$DIR/app/backend/bin/"
         chmod +x "$BIN_DIR/$tool"
         chmod +x "$DIR/app/backend/bin/$tool"
         echo "📦 Bundled $tool into app bundle"

@@ -9,23 +9,53 @@ import time
 import queue
 import re
 import urllib.parse
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import tempfile
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from typing import Dict, Any, Optional
+from pathlib import Path
+import hashlib
 
 # Add paths
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+venv_candidates = [
+    os.path.join(root_dir, ".venv", "lib", "python3.14", "site-packages"),
+    os.path.join(root_dir, ".venv", "lib", "python3.13", "site-packages"),
+    os.path.join(root_dir, ".venv", "lib", "python3.12", "site-packages"),
+    "/Users/taichi/AI/music/.venv/lib/python3.14/site-packages"
+]
+for p in (backend_dir, root_dir, app_dir) + tuple(venv_candidates):
+    if os.path.exists(p) and p not in sys.path:
+        sys.path.insert(0, p)
+
+from iphone_snapshot import pull_validated_database
+from environment import get_environment_report
+
 try:
     from backend.apple_music_sync import (
         import_folder_to_apple_music,
+        import_tracks_to_apple_music,
         send_macos_notification,
-        run_applescript
+        run_applescript,
+        compare_tracks_with_apple_music,
+        get_apple_music_library_tracks
     )
 except ImportError:
     from apple_music_sync import (
         import_folder_to_apple_music,
+        import_tracks_to_apple_music,
         send_macos_notification,
-        run_applescript
+        run_applescript,
+        compare_tracks_with_apple_music,
+        get_apple_music_library_tracks
     )
+
+try:
+    from export_iphone_music import scan_iphone_duplicates_from_db
+except ImportError:
+    def scan_iphone_duplicates_from_db(db_path: str) -> dict:
+        return {"error": "找不到 export_iphone_music 模組"}
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 DEFAULT_DOWNLOAD_DIR = os.path.expanduser("~/Music/YT_Downloads")
@@ -60,26 +90,22 @@ def get_pymobiledevice_bin():
     return shutil.which("pymobiledevice3") or "pymobiledevice3"
 
 def trigger_mac_iphone_sync():
-    """Trigger macOS iPhone sync seamlessly in background with smart status checks."""
-    info = get_connected_iphone_info()
-    dev_name = info.get("deviceName", "iPhone") if info.get("connected") else "iPhone"
-    
-    as_code = """
-    tell application "Music"
-        try
-            update
-        end try
-    end tell
+    """Open Finder for the supported user-confirmed music sync flow.
+
+    Direct writes to iOS MediaLibrary.sqlitedb are deliberately disabled: it is
+    private implementation state and an interrupted write can corrupt the
+    relationship between the library and media files.
     """
+    info = get_connected_iphone_info()
+    if not info.get("connected"):
+        return {"success": False, "error": "未偵測到連接的 iPhone，請插上傳輸線並在手機解鎖點選「信任」"}
+
     try:
-        subprocess.run(["osascript", "-e", as_code], capture_output=True, text=True, timeout=6)
-        if info.get("connected"):
-            msg = f"⚡️ 已自動與 {dev_name} 完成比對！音樂庫與歌單已保持最新狀態。"
-        else:
-            msg = "📱 已喚醒 Mac 音樂庫！傳輸線連接或處於同一 Wi-Fi 時將自動更新 iPhone。"
+        subprocess.run(["open", "-a", "Finder"], check=True, timeout=5)
         return {
-            "success": True,
-            "message": msg
+            "success": False,
+            "requires_manual_sync": True,
+            "error": "已開啟 Finder。請選取 iPhone，於「音樂」頁確認同步範圍後按「同步」。應用程式不再直接改寫 iPhone 音樂資料庫。"
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -125,9 +151,24 @@ JOB_QUEUES: Dict[str, list[queue.Queue]] = {}
 JOBS_LOCK = threading.Lock()
 
 def sanitize_filename(s):
-    if not s:
-        return "Unknown"
-    return "".join([c for c in s if c not in r'/\:*?"<>|']).strip()
+    """Create a single, collision-resistant path component for exports."""
+    raw = str(s or "").strip()
+    cleaned = "".join(c for c in raw if c not in r'/\:*?"<>|').strip(". ")
+    if not cleaned:
+        cleaned = "Unknown"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:10]
+    return f"{cleaned[:100]}-{digest}"
+
+def safe_directory(path: str | None, fallback: str) -> str:
+    """Restrict app output to the user's Music or Downloads folders."""
+    candidate = Path(os.path.expanduser(path or fallback)).resolve()
+    allowed_roots = [
+        Path(os.path.expanduser("~/Music")).resolve(),
+        Path(os.path.expanduser("~/Downloads")).resolve(),
+    ]
+    if not any(candidate == root or root in candidate.parents for root in allowed_roots):
+        raise ValueError("輸出位置必須位於使用者的 Music 或 Downloads 資料夾內")
+    return str(candidate)
 
 def broadcast_job_event(job_id: str, event_data: dict):
     with JOBS_LOCK:
@@ -136,6 +177,10 @@ def broadcast_job_event(job_id: str, event_data: dict):
         if job_id in JOB_QUEUES:
             for q in JOB_QUEUES[job_id]:
                 q.put(event_data)
+
+def request_origin_allowed(handler) -> bool:
+    origin = handler.headers.get("Origin", "")
+    return not origin or origin in ("http://127.0.0.1:4567", "http://localhost:4567")
 
 def get_connected_iphone_info():
     """Detect connected iPhone and query playlists from its MediaLibrary database."""
@@ -159,24 +204,23 @@ def get_connected_iphone_info():
         dev_ios = dev.get("ProductVersion", "")
 
         # Try to pull MediaLibrary database to list playlists
-        temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_db_inspect")
-        os.makedirs(temp_dir, exist_ok=True)
+        temp_dir = tempfile.mkdtemp(prefix="music_status_")
         db_path = os.path.join(temp_dir, "MediaLibrary.sqlitedb")
 
         playlists = []
         total_songs = 0
         try:
-            subprocess.run([pybin, "afc", "pull", "/iTunes_Control/iTunes/MediaLibrary.sqlitedb", db_path], capture_output=True, timeout=10)
+            pull_validated_database(pybin, db_path)
             if os.path.exists(db_path):
                 con = sqlite3.connect(db_path)
                 cur = con.cursor()
                 query = '''
-                SELECT 
+                SELECT
                     c.name as playlist_name,
                     COUNT(ci.item_pid) as track_count
                 FROM container c
                 LEFT JOIN container_item ci ON c.container_pid = ci.container_pid
-                WHERE c.distinguished_kind = 0 
+                WHERE c.distinguished_kind = 0
                   AND c.name NOT IN ('Photos Memories', '播放記錄', 'Taichi iPhone')
                 GROUP BY c.container_pid
                 HAVING track_count > 0
@@ -192,8 +236,18 @@ def get_connected_iphone_info():
                 total_songs = total_distinct if total_distinct > 0 else total_songs
                 con.close()
                 shutil.rmtree(temp_dir, ignore_errors=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return {
+                "connected": True,
+                "databaseReadable": False,
+                "error": "iPhone 已連線，但無法讀取音樂資料庫。請在 iPhone 上輸入解鎖密碼，保持螢幕解鎖後重新連接。",
+                "diagnostic": str(exc)
+            }
+
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        if not os.path.exists(db_path) and not playlists and total_songs == 0:
+            return {"connected": True, "databaseReadable": False, "error": "無法驗證 iPhone 音樂資料庫"}
 
         return {
             "connected": True,
@@ -209,13 +263,20 @@ def get_connected_iphone_info():
 def run_iphone_export_worker(job_id: str, params: dict):
     """Background worker exporting all songs and playlists from iPhone."""
     pybin = get_pymobiledevice_bin()
-    selected_playlists = params.get("playlists", [])
-    export_dir = params.get("export_dir") or IPHONE_EXPORT_DIR
-    export_dir = os.path.expanduser(export_dir)
-    os.makedirs(export_dir, exist_ok=True)
-
-    temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"temp_pull_{job_id}")
-    os.makedirs(temp_dir, exist_ok=True)
+    selected_playlists = params.get("playlists")
+    temp_dir = None
+    if selected_playlists == []:
+        broadcast_job_event(job_id, {"status": "error", "message": "未選取任何播放清單"})
+        return
+    try:
+        export_dir = safe_directory(params.get("export_dir"), IPHONE_EXPORT_DIR)
+        os.makedirs(export_dir, exist_ok=True)
+        export_dir = tempfile.mkdtemp(prefix="export_", dir=export_dir)
+        temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"temp_pull_{job_id}")
+        os.makedirs(temp_dir, exist_ok=True)
+    except Exception as e:
+        broadcast_job_event(job_id, {"status": "error", "progress": 0, "message": f"無法準備匯出工作：{e}"})
+        return
 
     broadcast_job_event(job_id, {
         "status": "starting",
@@ -225,7 +286,7 @@ def run_iphone_export_worker(job_id: str, params: dict):
 
     try:
         db_path = os.path.join(temp_dir, "MediaLibrary.sqlitedb")
-        subprocess.run([pybin, "afc", "pull", "/iTunes_Control/iTunes/MediaLibrary.sqlitedb", db_path], check=True)
+        pull_validated_database(pybin, db_path)
 
         broadcast_job_event(job_id, {
             "status": "pulling_files",
@@ -245,7 +306,7 @@ def run_iphone_export_worker(job_id: str, params: dict):
         con = sqlite3.connect(db_path)
         cur = con.cursor()
         query_tracks = '''
-        SELECT 
+        SELECT
             i.item_pid,
             ie.title,
             COALESCE(ia.item_artist, 'Unknown') as artist_name,
@@ -264,18 +325,18 @@ def run_iphone_export_worker(job_id: str, params: dict):
             }
 
         query_playlists = '''
-        SELECT 
+        SELECT
             c.name as playlist_name,
             ci.item_pid
         FROM container c
         JOIN container_item ci ON c.container_pid = ci.container_pid
-        WHERE c.distinguished_kind = 0 
+        WHERE c.distinguished_kind = 0
           AND c.name NOT IN ('Photos Memories', '播放記錄', 'Taichi iPhone')
         ORDER BY c.name, ci.position
         '''
         playlists_map = {}
         for pl_name, item_pid in cur.execute(query_playlists).fetchall():
-            if selected_playlists and pl_name not in selected_playlists:
+            if selected_playlists is not None and pl_name not in selected_playlists:
                 continue
             if pl_name not in playlists_map:
                 playlists_map[pl_name] = []
@@ -286,10 +347,12 @@ def run_iphone_export_worker(job_id: str, params: dict):
 
         import glob
         local_files = []
-        for ext in ("*.mp3", "*.m4a", "*.aac", "*.wav", "*.aif"):
+        for ext in ("*.mp3", "*.m4a", "*.aac", "*.wav", "*.aif", "*.aiff"):
             local_files.extend(glob.glob(os.path.join(music_pull_dir, "**", ext), recursive=True))
 
         total_files = len(local_files)
+        if playlists_map and total_files == 0:
+            raise RuntimeError("iPhone 資料庫有播放清單，但沒有找到可對應的實體音檔")
         broadcast_job_event(job_id, {
             "status": "exporting_tracks",
             "progress": 65,
@@ -307,6 +370,8 @@ def run_iphone_export_worker(job_id: str, params: dict):
             os.makedirs(pl_dir, exist_ok=True)
             all_exported_folders.append((pl_name, pl_dir))
 
+        matched_items = {name: set() for name in playlists_map}
+        ordered_files = {name: {} for name in playlists_map}
         copied_count = 0
         for i, src_path in enumerate(local_files):
             filename = os.path.basename(src_path)
@@ -350,17 +415,22 @@ def run_iphone_export_worker(job_id: str, params: dict):
 
             matched = False
             for pl_name, items in playlists_map.items():
-                for it in items:
-                    if it["title"].strip() and (it["title"].strip().lower() == title.strip().lower() or it["title"] in title):
+                for item_index, it in enumerate(items):
+                    title_match = it["title"].strip().lower() == title.strip().lower()
+                    artist_match = bool(artist) and it.get("artist", "").strip().casefold() == artist.strip().casefold()
+                    if it["title"].strip() and title_match and artist_match:
                         pl_dir = os.path.join(export_dir, sanitize_filename(pl_name))
                         target_file = os.path.join(pl_dir, dest_filename)
+                        if item_index in ordered_files[pl_name]:
+                            raise RuntimeError(f"音檔對應不唯一：{pl_name} / {title}")
                         if not os.path.exists(target_file):
                             shutil.copy2(src_path, target_file)
                             copied_count += 1
+                        ordered_files[pl_name][item_index] = target_file
+                        matched_items[pl_name].add(item_index)
                         matched = True
-                        break
 
-            if not matched:
+            if not matched and selected_playlists is None:
                 misc_dir = os.path.join(export_dir, "其他歌曲")
                 os.makedirs(misc_dir, exist_ok=True)
                 target_file = os.path.join(misc_dir, dest_filename)
@@ -377,6 +447,11 @@ def run_iphone_export_worker(job_id: str, params: dict):
                     "message": f"整理歌曲 [{i+1}/{total_files}]: {title or filename}"
                 })
 
+        missing = {name: len(items) - len(matched_items[name])
+                   for name, items in playlists_map.items()
+                   if len(items) != len(matched_items[name])}
+        if missing or not playlists_map:
+            raise RuntimeError("播放清單音檔對應不完整，未匯入 Mac：" + json.dumps(missing, ensure_ascii=False))
         shutil.rmtree(temp_dir, ignore_errors=True)
 
         broadcast_job_event(job_id, {
@@ -385,9 +460,16 @@ def run_iphone_export_worker(job_id: str, params: dict):
             "message": "正在將所有歌單自動匯入 Mac「音樂」App..."
         })
 
+        import_failures = []
         for pl_name, pl_dir in all_exported_folders:
             if os.path.exists(pl_dir) and os.listdir(pl_dir):
-                import_folder_to_apple_music(pl_dir, playlist_name=pl_name)
+                ok, msg = import_tracks_to_apple_music(
+                    [ordered_files[pl_name][i] for i in sorted(ordered_files[pl_name])],
+                    playlist_name=pl_name + "（iPhone 匯入 " + os.path.basename(export_dir) + "）")
+                if not ok:
+                    import_failures.append(f"{pl_name}: {msg}")
+        if import_failures:
+            raise RuntimeError("Apple Music 匯入不完整：" + "；".join(import_failures))
 
         send_macos_notification(
             "YT Music Downloader",
@@ -432,7 +514,7 @@ def extract_metadata(url: str) -> dict:
         thumbnail = data.get("thumbnail")
         if not thumbnail and is_playlist and "thumbnails" in data and data["thumbnails"]:
             thumbnail = data["thumbnails"][-1].get("url")
-            
+
         return {
             "success": True,
             "title": data.get("title", "未命名清單/影片"),
@@ -440,7 +522,7 @@ def extract_metadata(url: str) -> dict:
             "is_playlist": is_playlist,
             "count": len(entries) if is_playlist else 1,
             "thumbnail": thumbnail or "",
-            "entries": entries[:100]
+            "entries": entries
         }
     except subprocess.CalledProcessError as e:
         return {"success": False, "error": e.stderr.strip() or "無法解析此網址，請確認連結。"}
@@ -457,11 +539,12 @@ def run_download_worker(job_id: str, params: dict):
     embed_thumbnail = params.get("embed_thumbnail", True)
     embed_metadata = params.get("embed_metadata", True)
     sync_apple_music = params.get("sync_apple_music", True)
-    output_dir = params.get("output_dir") or DEFAULT_DOWNLOAD_DIR
-
-    output_dir = os.path.expanduser(output_dir)
-    os.makedirs(output_dir, exist_ok=True)
-
+    try:
+        output_dir = safe_directory(params.get("output_dir"), DEFAULT_DOWNLOAD_DIR)
+        os.makedirs(output_dir, exist_ok=True)
+    except Exception as e:
+        broadcast_job_event(job_id, {"status": "error", "progress": 0, "message": f"無法準備下載工作：{e}"})
+        return
     broadcast_job_event(job_id, {
         "status": "starting",
         "progress": 0,
@@ -469,7 +552,9 @@ def run_download_worker(job_id: str, params: dict):
         "output_dir": output_dir
     })
 
-    cmd = [get_bundled_bin("yt-dlp"), "--newline", "--ignore-errors"]
+    cmd = [get_bundled_bin("yt-dlp"), "--newline", "--abort-on-error",
+           "--print", "after_move:FINAL_FILE:%(filepath)j", "--no-simulate",
+           "--ffmpeg-location", os.path.dirname(get_bundled_bin("ffmpeg"))]
     if media_type == "audio":
         cmd.extend(["-x", "--audio-format", audio_format])
         if audio_format in ["mp3", "m4a"]:
@@ -493,6 +578,14 @@ def run_download_worker(job_id: str, params: dict):
     if embed_metadata:
         cmd.append("--embed-metadata")
 
+    selected_indices = params.get("selected_indices")
+    if selected_indices == []:
+        broadcast_job_event(job_id, {"status": "error", "message": "未選取任何曲目"})
+        return
+    if selected_indices and isinstance(selected_indices, list) and len(selected_indices) > 0:
+        items_str = ",".join(str(idx) for idx in selected_indices)
+        cmd.extend(["--playlist-items", items_str])
+
     output_template = os.path.join(output_dir, "%(playlist,uploader)s/%(playlist_index&{:02d} - |)s%(title)s.%(ext)s")
     cmd.extend(["-o", output_template])
     cmd.append(url)
@@ -500,6 +593,7 @@ def run_download_worker(job_id: str, params: dict):
     total_items = 1
     current_item = 1
     playlist_folder = output_dir
+    completed_files = []
 
     try:
         process = subprocess.Popen(
@@ -515,6 +609,13 @@ def run_download_worker(job_id: str, params: dict):
             line = raw_line.strip()
             if not line:
                 continue
+
+            if line.startswith("FINAL_FILE:"):
+                completed_path = Path(json.loads(line[len("FINAL_FILE:"):])).resolve()
+                if Path(output_dir).resolve() not in completed_path.parents or not completed_path.is_file():
+                    raise RuntimeError("下載輸出檔案不存在或超出指定目錄")
+                if str(completed_path) not in completed_files:
+                    completed_files.append(str(completed_path))
 
             m_items = re.search(r"Downloading (\d+) items of (\d+)", line)
             if m_items:
@@ -557,24 +658,29 @@ def run_download_worker(job_id: str, params: dict):
                 })
 
         process.wait()
+        if process.returncode != 0:
+            raise RuntimeError(f"下載工具失敗，結束碼：{process.returncode}")
 
-        subdirs = [os.path.join(output_dir, d) for d in os.listdir(output_dir) if os.path.isdir(os.path.join(output_dir, d))]
-        if subdirs:
-            latest_dir = max(subdirs, key=os.path.getmtime)
-            playlist_folder = latest_dir
-
+        if not completed_files:
+            raise RuntimeError("下載工具未提供可驗證的完成音檔，已停止匯入")
+        total_items = len(completed_files)
+        playlist_folder = os.path.dirname(completed_files[0])
         music_sync_msg = ""
         if media_type == "audio" and sync_apple_music:
             broadcast_job_event(job_id, {
                 "status": "syncing_music",
                 "progress": 99.5,
-                "message": "正在自動匯入 Mac「音樂」資料庫並發送 iPhone 背景同步指令..."
+                "message": "正在匯入本次下載的音檔至 Mac「音樂」資料庫..."
             })
             time.sleep(0.5)
             folder_name = os.path.basename(playlist_folder)
-            success, msg = import_folder_to_apple_music(playlist_folder, playlist_name=folder_name)
+            success, msg = import_tracks_to_apple_music(completed_files, playlist_name=folder_name)
+            if not success:
+                raise RuntimeError(msg)
             music_sync_msg = msg
-            trigger_mac_iphone_sync()
+            sync_result = trigger_mac_iphone_sync()
+            if not sync_result.get("success"):
+                music_sync_msg += f"；iPhone 同步未執行：{sync_result.get('error', '未知錯誤')}"
 
         send_macos_notification(
             "YT Music Downloader",
@@ -599,16 +705,26 @@ def run_download_worker(job_id: str, params: dict):
 
 class AppRequestHandler(BaseHTTPRequestHandler):
     def end_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        if origin in ("http://127.0.0.1:4567", "http://localhost:4567"):
+            self.send_header("Access-Control-Allow-Origin", origin)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         super().end_headers()
 
     def do_OPTIONS(self):
+        if not request_origin_allowed(self):
+            self.send_response(403)
+            self.end_headers()
+            return
         self.send_response(200)
         self.end_headers()
 
     def do_GET(self):
+        if not request_origin_allowed(self):
+            self.send_response(403)
+            self.end_headers()
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
@@ -623,6 +739,23 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 "downloads": os.path.expanduser("~/Downloads")
             }
             self.wfile.write(json.dumps(data).encode("utf-8"))
+            return
+
+        if path == "/api/environment":
+            self.send_json_response(200, get_environment_report(backend_dir))
+            return
+
+        if path == "/api/clipboard":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            try:
+                clipboard_cmd = ["powershell", "-NoProfile", "-Command", "Get-Clipboard"] if os.name == "nt" else ["pbpaste"]
+                res = subprocess.run(clipboard_cmd, capture_output=True, text=True, timeout=2)
+                text = res.stdout.strip()
+                self.wfile.write(json.dumps({"success": True, "text": text}, ensure_ascii=False).encode("utf-8"))
+            except Exception as e:
+                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
             return
 
         if path == "/api/iphone/status":
@@ -686,19 +819,20 @@ class AppRequestHandler(BaseHTTPRequestHandler):
 
         if path == "/" or path == "":
             path = "/index.html"
-        
-        file_path = os.path.join(STATIC_DIR, path.lstrip("/"))
-        if os.path.exists(file_path) and os.path.isfile(file_path):
+
+        static_root = Path(STATIC_DIR).resolve()
+        file_path = (static_root / path.lstrip("/")).resolve()
+        if static_root in file_path.parents and file_path.is_file():
             self.send_response(200)
-            if file_path.endswith(".html"):
+            if str(file_path).endswith(".html"):
                 self.send_header("Content-Type", "text/html; charset=utf-8")
-            elif file_path.endswith(".css"):
+            elif str(file_path).endswith(".css"):
                 self.send_header("Content-Type", "text/css; charset=utf-8")
-            elif file_path.endswith(".js"):
+            elif str(file_path).endswith(".js"):
                 self.send_header("Content-Type", "application/javascript; charset=utf-8")
-            elif file_path.endswith(".png"):
+            elif str(file_path).endswith(".png"):
                 self.send_header("Content-Type", "image/png")
-            elif file_path.endswith(".svg"):
+            elif str(file_path).endswith(".svg"):
                 self.send_header("Content-Type", "image/svg+xml")
             self.end_headers()
             with open(file_path, "rb") as f:
@@ -708,6 +842,9 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
+        if not request_origin_allowed(self):
+            self.send_json_response(403, {"success": False, "error": "拒絕非本機來源請求"})
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         content_len = int(self.headers.get("Content-Length", 0))
@@ -724,6 +861,34 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 return
             res = extract_metadata(url)
             self.send_json_response(200 if res.get("success") else 400, res)
+            return
+
+        if path == "/api/check-duplicates":
+            url = payload.get("url", "").strip()
+            entries = payload.get("entries")
+            if not entries and url:
+                info = extract_metadata(url)
+                if info.get("success"):
+                    entries = info.get("entries") or [{
+                        "index": 1,
+                        "title": info.get("title", ""),
+                        "uploader": info.get("uploader", "")
+                    }]
+                else:
+                    self.send_json_response(400, {"success": False, "error": info.get("error", "解析失敗")})
+                    return
+
+            if not entries:
+                self.send_json_response(400, {"success": False, "error": "缺乏可比對的曲目資訊"})
+                return
+
+            try:
+                playlist_name = payload.get("playlist_name")
+                res = compare_tracks_with_apple_music(entries, playlist_name=playlist_name)
+                res["success"] = True
+                self.send_json_response(200, res)
+            except Exception as e:
+                self.send_json_response(502, {"success": False, "error": str(e)})
             return
 
         if path == "/api/download":
@@ -744,6 +909,62 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             t = threading.Thread(target=run_download_worker, args=(job_id, payload), daemon=True)
             t.start()
             self.send_json_response(200, {"success": True, "job_id": job_id})
+            return
+
+        if path == "/api/iphone/scan-duplicates":
+            pybin = get_pymobiledevice_bin()
+            temp_dir = tempfile.mkdtemp(prefix="music_status_")
+            db_path = os.path.join(temp_dir, "MediaLibrary.sqlitedb")
+
+            try:
+                pull_validated_database(pybin, db_path)
+                if os.path.exists(db_path):
+                    from export_iphone_music import scan_iphone_duplicates_from_db
+                    res = scan_iphone_duplicates_from_db(db_path)
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    res["success"] = True
+                    self.send_json_response(200, res)
+                else:
+                    self.send_json_response(400, {"success": False, "error": "無法從 iPhone 讀取音樂資料庫，請確認手機已解鎖並信任"})
+            except Exception as e:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                self.send_json_response(500, {"success": False, "error": str(e)})
+            return
+
+        if path == "/api/mac/deduplicate":
+            try:
+                from apple_music_sync import deduplicate_apple_music_library
+                res = deduplicate_apple_music_library()
+                self.send_json_response(200, res)
+            except Exception as e:
+                self.send_json_response(500, {"success": False, "error": str(e)})
+            return
+
+        if path == "/api/sync/preview-diff":
+            direction = payload.get("direction", "iphone_to_mac")
+            selected_pls = payload.get("playlists")
+
+            pybin = get_pymobiledevice_bin()
+            temp_dir = tempfile.mkdtemp(prefix="music_diff_")
+            db_path = os.path.join(temp_dir, "MediaLibrary.sqlitedb")
+
+            try:
+                pull_validated_database(pybin, db_path)
+                if not os.path.exists(db_path):
+                    self.send_json_response(400, {"success": False, "error": "無法讀取 iPhone 音樂資料庫；不使用舊的本機快照"})
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    return
+
+                if os.path.exists(db_path):
+                    from apple_music_sync import calculate_differential_sync
+                    res = calculate_differential_sync(direction, db_path, selected_pls)
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    self.send_json_response(200, res)
+                else:
+                    self.send_json_response(400, {"success": False, "error": "無法讀取 iPhone 音樂資料庫，請確認手機已解鎖並信任此電腦"})
+            except Exception as e:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                self.send_json_response(500, {"success": False, "error": str(e)})
             return
 
         if path == "/api/iphone/export":
@@ -794,7 +1015,7 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         pass
 
 def start_server(port=4567):
-    server = HTTPServer(("127.0.0.1", port), AppRequestHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", port), AppRequestHandler)
     print(f"🎵 YT & iPhone Music Suite Server running at http://127.0.0.1:{port}")
     try:
         server.serve_forever()
